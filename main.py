@@ -2,8 +2,9 @@ import asyncio
 import time
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
+import os
 
-BOT_TOKEN = "PUT_YOUR_TOKEN_HERE"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 GROUP_A_ID = -1003904086062
 TOPIC_A_ID = 305
