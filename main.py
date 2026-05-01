@@ -57,7 +57,7 @@ async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # تخزين الحالة
-    active_searches[sent_msg.message_id] = {
+    active_searches[(target_group, sent_msg.message_id)] = {
         "origin_group": origin_group,
         "origin_topic": origin_topic,
         "origin_user": user,
@@ -83,7 +83,8 @@ async def handle_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg.reply_to_message:
         return
 
-    search = active_searches.get(msg.reply_to_message.message_id)
+    key = (msg.chat.id, msg.reply_to_message.message_id)
+search = active_searches.get(key)
 
     if not search:
         return
@@ -102,7 +103,7 @@ async def handle_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=f"✅ Found in {search['label']}\n@{user.username}\n💬 {msg.text}"
     )
 
-    del active_searches[msg.reply_to_message.message_id]
+    del active_searches[(msg.chat.id, msg.reply_to_message.message_id)]
 
 
 # ========= ROUTER =========
