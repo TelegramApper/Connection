@@ -1,8 +1,8 @@
 import asyncio
 import time
+import os
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
-import os
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
@@ -17,20 +17,19 @@ COOLDOWN = 10
 active_searches = {}
 user_cooldown = {}
 
-
 # ========= FIND =========
 async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     user = msg.from_user
     now = time.time()
 
-    # Anti spam
+    # Anti-spam
     if user.id in user_cooldown and now - user_cooldown[user.id] < COOLDOWN:
         return
 
     user_cooldown[user.id] = now
 
-    # لازم reply
+    # لازم reply على اسم اللاعب
     if not msg.reply_to_message:
         return
 
@@ -50,25 +49,26 @@ async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
         origin_topic = TOPIC_B_ID
         label = "Arabic group"
 
-    # إرسال
+    # إرسال للجروب التاني
     sent_msg = await context.bot.send_message(
         chat_id=target_group,
         message_thread_id=target_topic,
-        text=f"{player_name}\n👍 / ❤️ / Reply if you are here\n⏱️ 30 sec"
+        text=f"{player_name}\nReply if you are here\n⏱️ 20 sec"
     )
 
+    # تخزين الحالة
     active_searches[sent_msg.message_id] = {
         "origin_group": origin_group,
         "origin_topic": origin_topic,
         "origin_user": user,
-        "expire": time.time() + 30,
+        "expire": time.time() + 20,
         "handled": False,
         "label": label
     }
 
-    await asyncio.sleep(30)
+    # استنى 30 ثانية وبعدين امسح لو مفيش رد
+    await asyncio.sleep(20)
 
-    # حذف بعد انتهاء الوقت بدون رد
     if sent_msg.message_id in active_searches:
         del active_searches[sent_msg.message_id]
 
@@ -88,6 +88,7 @@ async def handle_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not search:
         return
 
+    # لو الوقت خلص أو already handled
     if time.time() > search["expire"] or search["handled"]:
         return
 
@@ -104,32 +105,6 @@ async def handle_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del active_searches[msg.reply_to_message.message_id]
 
 
-# ========= REACTIONS =========
-async def handle_reactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reaction = update.message_reaction
-    if not reaction:
-        return
-
-    search = active_searches.get(reaction.message_id)
-    if not search:
-        return
-
-    if time.time() > search["expire"] or search["handled"]:
-        return
-
-    search["handled"] = True
-
-    user = search["origin_user"]
-
-    await context.bot.send_message(
-        chat_id=search["origin_group"],
-        message_thread_id=search["origin_topic"],
-        text=f"✅ Found in {search['label']}\n@{user.username}\n👍"
-    )
-
-    del active_searches[reaction.message_id]
-
-
 # ========= ROUTER =========
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -144,9 +119,10 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     topic_id = msg.message_thread_id
 
-    # فلترة Topics
+    # فلترة التوبيك
     if chat_id == GROUP_A_ID and topic_id != TOPIC_A_ID:
         return
+
     if chat_id == GROUP_B_ID and topic_id != TOPIC_B_ID:
         return
 
@@ -162,7 +138,6 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(MessageHandler(filters.ALL, router))
-    app.add_handler(MessageHandler(filters.UpdateType.MESSAGE_REACTION, handle_reactions))
 
     print("Bot Running...")
     app.run_polling()
