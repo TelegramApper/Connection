@@ -94,7 +94,7 @@ async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).strip()
 
     if not player_name:
-        await msg.reply_text("The replied message has no text.")
+        await msg.reply_text("Please reply to the player name with the find option.")
         return
 
     route = get_route(update.effective_chat.id)
@@ -104,7 +104,7 @@ async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sent_msg = await context.bot.send_message(
         chat_id=route["target_group"],
         message_thread_id=route["target_topic"],
-        text=f"{player_name}\n\nReply or react if you are here.\n⏱️ {SEARCH_TIMEOUT} sec"
+        text=f"{player_name}\n\nReply if you are here.\n⏱️ {SEARCH_TIMEOUT} sec"
     )
 
     key = (route["target_group"], sent_msg.message_id)
