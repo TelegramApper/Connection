@@ -94,7 +94,7 @@ async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, play
     sent_msg = await context.bot.send_message(
         chat_id=route["target_group"],
         message_thread_id=route["target_topic"],
-        text=f"{player_name}\n\nReply or react if you are here.\n⏱️ {SEARCH_TIMEOUT} sec"
+        text=f"{player_name}\n\nReply if you are here.\n⏱️ {SEARCH_TIMEOUT} sec"
     )
 
     key = (route["target_group"], sent_msg.message_id)
