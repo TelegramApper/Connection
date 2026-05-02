@@ -1,6 +1,7 @@
 import asyncio
 import time
 import os
+import re
 import html
 
 from telegram import Update
@@ -68,8 +69,7 @@ async def cleanup_search_later(key):
         del active_searches[key]
 
 
-# ========= FIND =========
-async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, player_name: str):
     msg = update.message
     if not msg or not msg.from_user:
         return
@@ -82,19 +82,9 @@ async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_cooldown[user.id] = now
 
-    if not msg.reply_to_message:
-        await msg.reply_text("Use /find as a reply to the player name.")
-        return
-
-    source_msg = msg.reply_to_message
-    player_name = (
-        source_msg.text
-        or source_msg.caption
-        or ""
-    ).strip()
-
+    player_name = player_name.strip()
     if not player_name:
-        await msg.reply_text("Please reply to the player name with the find option.")
+        await msg.reply_text("Write the player name first.")
         return
 
     route = get_route(update.effective_chat.id)
@@ -104,7 +94,7 @@ async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sent_msg = await context.bot.send_message(
         chat_id=route["target_group"],
         message_thread_id=route["target_topic"],
-        text=f"{player_name}\n\nReply if you are here.\n⏱️ {SEARCH_TIMEOUT} sec"
+        text=f"{player_name}\n\nReply or react if you are here.\n⏱️ {SEARCH_TIMEOUT} sec"
     )
 
     key = (route["target_group"], sent_msg.message_id)
@@ -122,6 +112,31 @@ async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     asyncio.create_task(cleanup_search_later(key))
+
+
+# ========= FIND BY REPLY =========
+async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg:
+        return
+
+    if not msg.reply_to_message:
+        await msg.reply_text("Use /find or /f as a reply to the player name, or send: Name /f")
+        return
+
+    source_msg = msg.reply_to_message
+    player_name = (source_msg.text or source_msg.caption or "").strip()
+
+    if not player_name:
+        await msg.reply_text("The replied message has no text.")
+        return
+
+    await create_search(update, context, player_name)
+
+
+# ========= FIND INLINE: Fab /f =========
+async def handle_inline_find(update: Update, context: ContextTypes.DEFAULT_TYPE, player_name: str):
+    await create_search(update, context, player_name)
 
 
 # ========= REPLY =========
@@ -176,10 +191,7 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not reaction_update:
         return
 
-    if not reaction_update.user:
-        return
-
-    if reaction_update.user.is_bot:
+    if not reaction_update.user or reaction_update.user.is_bot:
         return
 
     if not is_allowed_topic(reaction_update.chat.id, reaction_update.message_thread_id):
@@ -246,21 +258,28 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed_topic(chat_id, topic_id):
         return
 
-    text = (msg.text or "").strip().lower()
+    text = (msg.text or "").strip()
 
-    if text.startswith("/find"):
-        await handle_find(update, context)
-    else:
-        await handle_replies(update, context)
+    # /find أو /f كـ reply
+    if text.lower().startswith("/find") or text.lower().startswith("/f"):
+        if msg.reply_to_message:
+            await handle_find(update, context)
+            return
+
+    # Name /f أو Name/f
+    match = re.match(r"^(.*?)\s*/f$", text, re.IGNORECASE)
+    if match:
+        player_name = match.group(1).strip()
+        if player_name:
+            await handle_inline_find(update, context, player_name)
+        return
+
+    await handle_replies(update, context)
 
 
 # ========= MAIN =========
 def main():
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
+    app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(MessageHandler(filters.ALL, router))
     app.add_handler(MessageReactionHandler(handle_reaction))
