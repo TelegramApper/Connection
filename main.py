@@ -24,6 +24,7 @@ TOPIC_B_ID = 3302852
 
 COOLDOWN = 10
 SEARCH_TIMEOUT = 20
+CONFIRM_DELETE_DELAY = 15
 
 active_searches = {}
 user_cooldown = {}
@@ -62,6 +63,19 @@ def is_allowed_topic(chat_id: int, topic_id: int | None) -> bool:
     return False
 
 
+async def delete_message_later(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    message_id: int,
+    delay: int = CONFIRM_DELETE_DELAY
+):
+    await asyncio.sleep(delay)
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+
+
 async def cleanup_search_later(key):
     await asyncio.sleep(SEARCH_TIMEOUT)
     search = active_searches.get(key)
@@ -91,10 +105,20 @@ async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, play
     if not route:
         return
 
+    confirm_msg = await msg.reply_text(f"Searching for {player_name}")
+    asyncio.create_task(
+        delete_message_later(
+            context,
+            chat_id=confirm_msg.chat_id,
+            message_id=confirm_msg.message_id,
+            delay=CONFIRM_DELETE_DELAY
+        )
+    )
+
     sent_msg = await context.bot.send_message(
         chat_id=route["target_group"],
         message_thread_id=route["target_topic"],
-        text=f"{player_name}\n\nReply if you are here.\n⏱️ {SEARCH_TIMEOUT} sec"
+        text=f"{player_name}\n\nReply to this MSG if you are here.\n⏱️ {SEARCH_TIMEOUT} sec"
     )
 
     key = (route["target_group"], sent_msg.message_id)
