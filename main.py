@@ -41,10 +41,26 @@ active_searches = {}
 user_cooldown = {}
 BLACKLIST = set()
 
+# ===== ترجمة الرسائل الإيطالية والإنجليزية =====
+MESSAGES = {
+    "en": {
+        "header": "Reply or react if you are here.\n⏱️ {SEARCH_TIMEOUT} sec",
+        "blacklisted": "{player_name} is blacklisted, please leave this match.",
+        "searching_for": "Searching for {player_name}",
+        "found_in_arabic": "✅ Found in Arabic group\n@{user_name}\n💬 {msg_text}",
+        "no_text": "The replied message has no text.",
+    },
+    "it": {
+        "header": "Rispondi a questo messaggio (in Inglese) se sei qua\n⏱️ {SEARCH_TIMEOUT} sec",
+        "blacklisted": "È in blacklist, abbandona la partita",
+        "searching_for": "Sto cercando",
+        "found_in_arabic": "Trovato nel gruppo arabo\n@{user_name}\n💬 {msg_text}",
+        "no_text": "Per favore scrivi il nome prima del comando",
+    }
+}
 
 def normalize_name(name: str) -> str:
     return (name or "").strip().casefold()
-
 
 def load_blacklist():
     global BLACKLIST
@@ -60,17 +76,14 @@ def load_blacklist():
         BLACKLIST = set()
         logger.exception("Failed to load blacklist: %s", e)
 
-
 def save_blacklist():
     with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
         json.dump(sorted(BLACKLIST), f, ensure_ascii=False, indent=2)
     logger.info("Blacklist saved: %s items", len(BLACKLIST))
 
-
 def user_mention(user_id: int, full_name: str) -> str:
     safe_name = html.escape(full_name or "User")
     return f"<a href='tg://user?id={user_id}'>{safe_name}</a>"
-
 
 def get_route(chat_id: int):
     if chat_id == GROUP_A_ID:
@@ -91,14 +104,12 @@ def get_route(chat_id: int):
         }
     return None
 
-
 def is_allowed_topic(chat_id: int, topic_id: int | None) -> bool:
     if chat_id == GROUP_A_ID:
         return topic_id == TOPIC_A_ID
     if chat_id == GROUP_B_ID:
         return topic_id == TOPIC_B_ID
     return False
-
 
 def is_owner(update: Update) -> bool:
     user = update.effective_user
@@ -109,7 +120,6 @@ def is_owner(update: Update) -> bool:
         and user.id == OWNER_ID
         and chat.type == ChatType.PRIVATE
     )
-
 
 async def delete_message_later(
     context: ContextTypes.DEFAULT_TYPE,
@@ -123,14 +133,12 @@ async def delete_message_later(
     except Exception:
         pass
 
-
 async def cleanup_search_later(key):
     await asyncio.sleep(SEARCH_TIMEOUT)
     search = active_searches.get(key)
     if search and not search["handled"] and time.time() > search["expire"]:
         del active_searches[key]
         logger.info("Search expired and removed: %s", key)
-
 
 async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, player_name: str):
     msg = update.message
@@ -153,7 +161,6 @@ async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, play
 
     normalized_name = normalize_name(player_name)
     if normalized_name in BLACKLIST:
-        logger.info("Blocked blacklisted name: %s", player_name)
         await msg.reply_text(f"{player_name} is blacklisted, please leave this match.")
         return
 
@@ -162,28 +169,20 @@ async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, play
         logger.warning("No route found for chat_id=%s", update.effective_chat.id)
         return
 
-    logger.info(
-        "Creating search: player=%s from_chat=%s to_chat=%s thread=%s",
-        player_name,
-        update.effective_chat.id,
-        route["target_group"],
-        route["target_topic"],
-    )
+    # حدد اللغة: إذا الجروب في إيطاليا فـ "it"، غيرها "en"
+    if route["target_group"] == GROUP_B_ID:
+        lang = "it"
+    else:
+        lang = "en"
 
-    confirm_msg = await msg.reply_text(f"Searching for {player_name}")
-    asyncio.create_task(
-        delete_message_later(
-            context,
-            chat_id=confirm_msg.chat_id,
-            message_id=confirm_msg.message_id,
-            delay=CONFIRM_DELETE_DELAY,
-        )
-    )
+    # رسائل الجروب الإيطالي تستخدم النص الإيطالي
+    header = MESSAGES[lang]["header"].format(SEARCH_TIMEOUT=SEARCH_TIMEOUT)
+    logger.info("Sending header in lang=%s: %s", lang, header)
 
     sent_msg = await context.bot.send_message(
         chat_id=route["target_group"],
         message_thread_id=route["target_topic"],
-        text=f"{player_name}\n\nReply or react if you are here.\n⏱️ {SEARCH_TIMEOUT} sec",
+        text=header
     )
 
     key = (route["target_group"], sent_msg.message_id)
@@ -198,11 +197,11 @@ async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, play
         "expire": time.time() + SEARCH_TIMEOUT,
         "handled": False,
         "label": route["label"],
+        "lang": lang,
     }
 
-    logger.info("Search stored with key=%s", key)
+    logger.info("Search stored with key=%s, lang=%s", key, lang)
     asyncio.create_task(cleanup_search_later(key))
-
 
 async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -216,19 +215,15 @@ async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     source_msg = msg.reply_to_message
     player_name = (source_msg.text or source_msg.caption or "").strip()
 
-    logger.info("handle_find triggered with reply player_name=%s", player_name)
-
     if not player_name:
         await msg.reply_text("The replied message has no text.")
         return
 
     await create_search(update, context, player_name)
 
-
 async def handle_inline_find(update: Update, context: ContextTypes.DEFAULT_TYPE, player_name: str):
     logger.info("handle_inline_find triggered with player_name=%s", player_name)
     await create_search(update, context, player_name)
-
 
 async def handle_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -246,8 +241,6 @@ async def handle_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = (msg.chat.id, msg.reply_to_message.message_id)
     search = active_searches.get(key)
 
-    logger.info("Reply received: key=%s found=%s", key, bool(search))
-
     if not search:
         return
 
@@ -255,29 +248,37 @@ async def handle_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Reply ignored because expired or handled: key=%s", key)
         return
 
+    # لغة الرسالة (الإنجليزي أو الإيطالي) تأتي من الحالة
+    lang = search.get("lang", "en")
+
     search["handled"] = True
 
     origin_mention = user_mention(search["origin_user_id"], search["origin_user_name"])
     responder_mention = user_mention(msg.from_user.id, msg.from_user.full_name)
     reply_text = html.escape(msg.text or msg.caption or "Reply received")
 
+    # في الجروب العربي: الرسالة بالإنجليزي، في الجروب الإيطالي: الإيطالي.
+    if search["origin_group"] == GROUP_A_ID:
+        lang_reply = "en"
+    else:
+        lang_reply = "it"
+
+    text = MESSAGES[lang_reply]["found_in_arabic"].format(
+        user_name=origin_mention,
+        msg_text=reply_text
+    )
+
     await context.bot.send_message(
         chat_id=search["origin_group"],
         message_thread_id=search["origin_topic"],
         reply_to_message_id=search["find_message_id"],
-        text=(
-            f"✅ Found in {html.escape(search['label'])}\n"
-            f"{origin_mention}\n"
-            f"👤 Response from: {responder_mention}\n"
-            f"💬 {reply_text}"
-        ),
+        text=text,
         parse_mode=ParseMode.HTML,
     )
 
     if key in active_searches:
         del active_searches[key]
         logger.info("Reply handled and search removed: %s", key)
-
 
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reaction_update = update.message_reaction
@@ -299,8 +300,6 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = (reaction_update.chat.id, reaction_update.message_id)
     search = active_searches.get(key)
 
-    logger.info("Reaction received: key=%s found=%s", key, bool(search))
-
     if not search:
         return
 
@@ -308,11 +307,11 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Reaction ignored because expired or handled: key=%s", key)
         return
 
+    search["handled"] = True
+
     new_reactions = reaction_update.new_reaction or []
     if not new_reactions:
         return
-
-    search["handled"] = True
 
     reaction_texts = []
     for r in new_reactions:
@@ -327,16 +326,22 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     origin_mention = user_mention(search["origin_user_id"], search["origin_user_name"])
     reactor_mention = user_mention(reaction_update.user.id, reaction_update.user.full_name)
 
+    # في الجروب العربي: الإنجليزي، في الجروب الإيطالي: الإيطالي
+    if search["origin_group"] == GROUP_A_ID:
+        lang_reply = "en"
+    else:
+        lang_reply = "it"
+
+    text = MESSAGES[lang_reply]["found_in_arabic"].format(
+        user_name=origin_mention,
+        msg_text=f"Reaction {reactions_str}"
+    )
+
     await context.bot.send_message(
         chat_id=search["origin_group"],
         message_thread_id=search["origin_topic"],
         reply_to_message_id=search["find_message_id"],
-        text=(
-            f"✅ Found in {html.escape(search['label'])}\n"
-            f"{origin_mention}\n"
-            f"👤 Reaction from: {reactor_mention}\n"
-            f"❤️ {html.escape(reactions_str)}"
-        ),
+        text=text,
         parse_mode=ParseMode.HTML,
     )
 
@@ -344,13 +349,11 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del active_searches[key]
         logger.info("Reaction handled and search removed: %s", key)
 
-
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg or not update.effective_user:
         return
     await msg.reply_text(f"Your user ID is: {update.effective_user.id}")
-
 
 async def blacklist_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -380,7 +383,6 @@ async def blacklist_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_blacklist()
     await msg.reply_text(f"{player_name} added to blacklist.")
 
-
 async def blacklist_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg:
@@ -405,7 +407,6 @@ async def blacklist_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_blacklist()
     await msg.reply_text(f"{player_name} removed from blacklist.")
 
-
 async def blacklist_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg:
@@ -421,7 +422,6 @@ async def blacklist_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "Blacklisted names:\n" + "\n".join(f"- {name}" for name in sorted(BLACKLIST))
     await msg.reply_text(text)
-
 
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -465,19 +465,18 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Command-like text detected: %s", text)
         if msg.reply_to_message:
             await handle_find(update, context)
-            return
-        logger.info("Command ignored because it is not a reply")
+        else:
+            logger.info("Command ignored because it is not a reply")
+        return
 
     match = re.match(r"^(.*?)\s*/f$", text, re.IGNORECASE)
     if match:
         player_name = match.group(1).strip()
-        logger.info("Inline /f matched for player=%s", player_name)
         if player_name:
             await handle_inline_find(update, context, player_name)
-        return
+            return
 
     await handle_replies(update, context)
-
 
 def main():
     load_blacklist()
@@ -494,7 +493,6 @@ def main():
 
     logger.info("Bot starting...")
     app.run_polling(allowed_updates=["message", "message_reaction"])
-
 
 if __name__ == "__main__":
     main()
