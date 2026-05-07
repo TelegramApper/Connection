@@ -24,15 +24,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# OWNER_ID ما يُستخدم كـ fallback بس لو حابب
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
-# ADMINS: أكثر من مستخدم واحد يقدر يتحكم في الـ blacklist
 ADMINS_RAW = os.getenv("ADMINS", "")
 ADMINS = set()
 if ADMINS_RAW:
     try:
-        ADMINS = {int(id_str.strip()) for id_str in ADMINS_RAW.split(",") if id_str.strip()}
+        ADMINS = {int(x.strip()) for x in ADMINS_RAW.split(",") if x.strip()}
     except Exception as e:
         logger.exception("Failed to parse ADMINS: %s", e)
 logger.info("ADMINS loaded: %s", ADMINS)
@@ -55,25 +53,25 @@ BLACKLIST = set()
 
 TEXTS = {
     "en": {
-        "header": "Reply to this message if you are here.\\n⏱️ {timeout} sec",
+        "header": "Reply to this message if you are here.\n⏱️ {timeout} sec",
         "blacklisted": "{player} is blacklisted, please leave this match.",
         "searching": "Searching for {player}",
-        "found_ar": "✅ Found in Italian group\\n{origin}\\n👤 Response from: {actor}\\n💬 {content}",
-        "found_it": "✅ Found in Arabic group\\n{origin}\\n👤 Response from: {actor}\\n💬 {content}",
-        "react_ar": "✅ Found in Italian group\\n{origin}\\n👤 Reaction from: {actor}\\n❤️ {content}",
-        "react_it": "✅ Found in Arabic group\\n{origin}\\n👤 Reaction from: {actor}\\n❤️ {content}",
+        "found_ar": "✅ Found in Italian group\n{origin}\n👤 Response from: {actor}\n💬 {content}",
+        "found_it": "✅ Found in Arabic group\n{origin}\n👤 Response from: {actor}\n💬 {content}",
+        "react_ar": "✅ Found in Italian group\n{origin}\n👤 Reaction from: {actor}\n❤️ {content}",
+        "react_it": "✅ Found in Arabic group\n{origin}\n👤 Reaction from: {actor}\n❤️ {content}",
         "no_text": "The replied message has no text.",
         "usage": "Use /find or /f as a reply to the player name, or send: Name /f",
         "write_name": "Write the player name first.",
     },
     "it": {
-        "header": "Rispondi a questo messaggio (in Inglese) se sei qua\\n⏱️ {timeout} sec",
+        "header": "Rispondi a questo messaggio (in Inglese) se sei qua\n⏱️ {timeout} sec",
         "blacklisted": "È in blacklist, abbandona la partita",
         "searching": "Sto cercando {player}",
-        "found_ar": "✅ Trovato nel gruppo arabo\\n{origin}\\n👤 Risposta da: {actor}\\n💬 {content}",
-        "found_it": "✅ Trovato nel gruppo italiano\\n{origin}\\n👤 Risposta da: {actor}\\n💬 {content}",
-        "react_ar": "✅ Trovato nel gruppo arabo\\n{origin}\\n👤 Reazione da: {actor}\\n❤️ {content}",
-        "react_it": "✅ Trovato nel gruppo italiano\\n{origin}\\n👤 Reazione da: {actor}\\n❤️ {content}",
+        "found_ar": "✅ Trovato nel gruppo arabo\n{origin}\n👤 Risposta da: {actor}\n💬 {content}",
+        "found_it": "✅ Trovato nel gruppo italiano\n{origin}\n👤 Risposta da: {actor}\n💬 {content}",
+        "react_ar": "✅ Trovato nel gruppo arabo\n{origin}\n👤 Reazione da: {actor}\n❤️ {content}",
+        "react_it": "✅ Trovato nel gruppo italiano\n{origin}\n👤 Reazione da: {actor}\n❤️ {content}",
         "no_text": "Per favore scrivi il nome prima del comando",
         "usage": "Usa /f rispondendo al nome del player, oppure scrivi: Nome /f",
         "write_name": "Per favore scrivi il nome prima del comando",
@@ -146,7 +144,7 @@ def is_owner(update: Update) -> bool:
     chat = update.effective_chat
     if not user or not chat or chat.type != ChatType.PRIVATE:
         return False
-    return user.id in ADMINS  # أي واحد في ADMINS يقدر يستخدم الأوامر
+    return user.id in ADMINS or user.id == OWNER_ID
 
 async def delete_message_later(context, chat_id: int, message_id: int, delay: int = CONFIRM_DELETE_DELAY):
     await asyncio.sleep(delay)
@@ -190,12 +188,18 @@ async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, play
 
     normalized_name = normalize_name(player_name)
     if normalized_name in BLACKLIST:
-        text = TEXTS["it"]["blacklisted"] if source_lang == "it" else TEXTS["en"]["blacklisted"].format(player=player_name)
-        await msg.reply_text(text)
+        if source_lang == "it":
+            await msg.reply_text(f"{player_name} {TEXTS['it']['blacklisted']}")
+        else:
+            await msg.reply_text(TEXTS["en"]["blacklisted"].format(player=player_name))
         return
 
+    confirm_text = TEXTS[source_lang]["searching"].format(player=player_name)
+    confirm_msg = await msg.reply_text(confirm_text)
+    asyncio.create_task(delete_message_later(context, confirm_msg.chat_id, confirm_msg.message_id, CONFIRM_DELETE_DELAY))
+
     header_lang = "it" if source_chat_id == GROUP_A_ID else "en"
-    header_text = f"{player_name}\\n\\n" + TEXTS[header_lang]["header"].format(timeout=SEARCH_TIMEOUT)
+    header_text = f"{player_name}\n\n" + TEXTS[header_lang]["header"].format(timeout=SEARCH_TIMEOUT)
 
     logger.info(
         "Creating search: player=%s from_chat=%s to_chat=%s thread=%s",
@@ -231,7 +235,7 @@ async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg or not chat:
         return
 
-    lang = "it" if is_group_b(chat.id) else "en"
+    lang = chat_lang(chat.id)
 
     if not msg.reply_to_message:
         await msg.reply_text(TEXTS[lang]["usage"])
@@ -398,14 +402,12 @@ async def blacklist_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Blacklist is empty.")
         return
 
-    text = "Blacklisted names:\\n" + "\\n".join(f"- {name}" for name in sorted(BLACKLIST))
+    text = "Blacklisted names:\n" + "\n".join(f"- {name}" for name in sorted(BLACKLIST))
     await msg.reply_text(text)
 
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
-    if not msg:
-        return
-    if not msg.from_user or msg.from_user.is_bot:
+    if not msg or not msg.from_user or msg.from_user.is_bot:
         return
 
     chat = update.effective_chat
@@ -429,7 +431,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(TEXTS[lang]["usage"])
         return
 
-    match = re.match(r"^(.*?)\\s*/f$", text, re.IGNORECASE)
+    match = re.match(r"^(.*?)\s*/f$", text, re.IGNORECASE)
     if match:
         player_name = match.group(1).strip()
         if player_name:
@@ -448,4 +450,11 @@ def main():
     app.add_handler(CommandHandler("blacklist_remove", blacklist_remove))
     app.add_handler(CommandHandler("blacklist_list", blacklist_list))
 
-   
+    app.add_handler(MessageReactionHandler(handle_reaction))
+    app.add_handler(MessageHandler(filters.ALL, router))
+
+    logger.info("Bot starting...")
+    app.run_polling(allowed_updates=["message", "message_reaction"])
+
+if __name__ == "__main__":
+    main()
