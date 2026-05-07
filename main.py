@@ -56,11 +56,11 @@ TEXTS = {
         "header": "Reply to this message if you are here.\n⏱️ {timeout} sec",
         "blacklisted": "{player} is blacklisted, please leave this match.",
         "searching": "Searching for {player}",
-        "found_ar": "✅ Found in Italian group\n{origin}\n👤 Response from: {actor}\n💬 {content}",
-        "found_it": "✅ Found in Arabic group\n{origin}\n👤 Response from: {actor}\n💬 {content}",
-        "react_ar": "✅ Found in Italian group\n{origin}\n👤 Reaction from: {actor}\n❤️ {content}",
-        "react_it": "✅ Found in Arabic group\n{origin}\n👤 Reaction from: {actor}\n❤️ {content}",
-        "no_text": "The replied message has no text.",
+        "found_ar": "✅ Found in Arabic group\n{origin}\n👤 Response from: {actor}\n💬 {content}",
+        "found_it": "✅ Found in Italian group\n{origin}\n👤 Response from: {actor}\n💬 {content}",
+        "react_ar": "✅ Found in Arabic group\n{origin}\n👤 Reaction from: {actor}\n❤️ {content}",
+        "react_it": "✅ Found in Italian group\n{origin}\n👤 Reaction from: {actor}\n❤️ {content}",
+        "no_text": "Use /find or /f as a reply to the player name, or just send: player Name /f.",
         "usage": "Use /find or /f as a reply to the player name, or send: Name /f",
         "write_name": "Write the player name first.",
     },
@@ -72,7 +72,7 @@ TEXTS = {
         "found_it": "✅ Trovato nel gruppo italiano\n{origin}\n👤 Risposta da: {actor}\n💬 {content}",
         "react_ar": "✅ Trovato nel gruppo arabo\n{origin}\n👤 Reazione da: {actor}\n❤️ {content}",
         "react_it": "✅ Trovato nel gruppo italiano\n{origin}\n👤 Reazione da: {actor}\n❤️ {content}",
-        "no_text": "Per favore scrivi il nome prima del comando",
+        "no_text": "Usa /f rispondendo al nome del player, oppure scrivi: player Nome /f",
         "usage": "Usa /f rispondendo al nome del player, oppure scrivi: Nome /f",
         "write_name": "Per favore scrivi il nome prima del comando",
     },
@@ -351,7 +351,7 @@ async def blacklist_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         return
     if not is_owner(update):
-        await msg.reply_text("This command is available only in private chat for the bot owner(s).")
+        await msg.reply_text("Fuck OFF Your Not an admin, idiot.")
         return
     if not context.args:
         await msg.reply_text("Usage: /blacklist_add name")
