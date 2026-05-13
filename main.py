@@ -107,29 +107,44 @@ def compact_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", normalize_name(name))
 
 def find_partial_blacklist_matches(player_name: str):
+    logger.info("PLAYER RAW = %r", player_name)
+    logger.info("PLAYER NORMALIZED = %r", normalize_name(player_name))
+    logger.info("PLAYER COMPACT = %r", compact_name(player_name))
+    logger.info("BLACKLIST = %s", sorted(BLACKLIST))
+
     query_norm = normalize_name(player_name)
     query_compact = compact_name(player_name)
 
     if not query_norm:
+        logger.info("MATCHES = [] (empty query_norm)")
         return []
 
     exact_matches = [name for name in BLACKLIST if normalize_name(name) == query_norm]
+    logger.info("EXACT MATCHES = %s", exact_matches)
     if exact_matches:
+        logger.info("MATCHES = %s", exact_matches)
         return exact_matches
 
     if len(query_compact) < 4:
+        logger.info("MATCHES = [] (query too short)")
         return []
 
     prefix_matches = [name for name in BLACKLIST if compact_name(name).startswith(query_compact)]
+    logger.info("PREFIX MATCHES = %s", prefix_matches)
     if prefix_matches:
+        logger.info("MATCHES = %s", prefix_matches)
         return sorted(prefix_matches)
 
     contains_matches = [name for name in BLACKLIST if query_compact in compact_name(name)]
+    logger.info("CONTAINS MATCHES = %s", contains_matches)
+
     if len(contains_matches) == 1:
+        logger.info("MATCHES = %s", contains_matches)
         return sorted(contains_matches)
 
-    return sorted(prefix_matches or contains_matches)
-
+    logger.info("MATCHES = %s", contains_matches)
+    return sorted(contains_matches)
+    
 def load_blacklist():
     global BLACKLIST
     try:
