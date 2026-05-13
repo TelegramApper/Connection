@@ -100,11 +100,14 @@ TEXTS = {
     },
 }
 
+
 def normalize_name(name: str) -> str:
     return (name or "").strip().casefold()
 
+
 def compact_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", normalize_name(name))
+
 
 def find_partial_blacklist_matches(player_name: str):
     logger.info("PLAYER RAW = %r", player_name)
@@ -125,7 +128,7 @@ def find_partial_blacklist_matches(player_name: str):
         logger.info("MATCHES = %s", exact_matches)
         return exact_matches
 
-    if len(query_compact) < 4:
+    if len(query_compact) < 3:
         logger.info("MATCHES = [] (query too short)")
         return []
 
@@ -144,13 +147,14 @@ def find_partial_blacklist_matches(player_name: str):
 
     logger.info("MATCHES = %s", contains_matches)
     return sorted(contains_matches)
-    
+
+
 def load_blacklist():
     global BLACKLIST
     try:
         with open(BLACKLIST_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            BLACKLIST = {normalize_name(name) for name in data if str(name).strip()}
+        BLACKLIST = {normalize_name(name) for name in data if str(name).strip()}
         logger.info("Blacklist loaded: %s items", len(BLACKLIST))
     except FileNotFoundError:
         BLACKLIST = set()
@@ -159,23 +163,29 @@ def load_blacklist():
         BLACKLIST = set()
         logger.exception("Failed to load blacklist: %s", e)
 
+
 def save_blacklist():
     with open(BLACKLIST_FILE, "w", encoding="utf-8") as f:
         json.dump(sorted(BLACKLIST), f, ensure_ascii=False, indent=2)
     logger.info("Blacklist saved: %s items", len(BLACKLIST))
 
+
 def user_mention(user_id: int, full_name: str) -> str:
     safe_name = html.escape(full_name or "User")
-    return f"<a href='tg://user?id={user_id}'>{safe_name}</a>"
+    return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+
 
 def is_group_a(chat_id: int) -> bool:
     return chat_id == GROUP_A_ID
 
+
 def is_group_b(chat_id: int) -> bool:
     return chat_id == GROUP_B_ID
 
+
 def chat_lang(chat_id: int) -> str:
     return "it" if is_group_b(chat_id) else "en"
+
 
 def get_route(chat_id: int):
     if chat_id == GROUP_A_ID:
@@ -196,12 +206,14 @@ def get_route(chat_id: int):
         }
     return None
 
+
 def is_allowed_topic(chat_id: int, topic_id: int | None) -> bool:
     if chat_id == GROUP_A_ID:
         return topic_id == TOPIC_A_ID
     if chat_id == GROUP_B_ID:
         return topic_id == TOPIC_B_ID
     return False
+
 
 def is_owner(update: Update) -> bool:
     user = update.effective_user
@@ -210,12 +222,14 @@ def is_owner(update: Update) -> bool:
         return False
     return user.id in ADMINS or user.id == OWNER_ID
 
+
 async def delete_message_later(context, chat_id: int, message_id: int, delay: int = CONFIRM_DELETE_DELAY):
     await asyncio.sleep(delay)
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
     except Exception:
         pass
+
 
 async def cleanup_search_later(key):
     await asyncio.sleep(SEARCH_TIMEOUT)
@@ -224,12 +238,14 @@ async def cleanup_search_later(key):
         del active_searches[key]
         logger.info("Search expired and removed: %s", key)
 
+
 async def cleanup_decision_later(decision_id):
     await asyncio.sleep(DECISION_TIMEOUT)
     decision = pending_blacklist_decisions.get(decision_id)
     if decision and time.time() > decision["expire"]:
         pending_blacklist_decisions.pop(decision_id, None)
         logger.info("Decision expired and removed: %s", decision_id)
+
 
 async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, player_name: str, skip_blacklist_check: bool = False):
     msg = update.message
@@ -337,6 +353,7 @@ async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, play
     logger.info("Search stored with key=%s", key)
     asyncio.create_task(cleanup_search_later(key))
 
+
 async def handle_blacklist_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query or not query.data:
@@ -367,13 +384,9 @@ async def handle_blacklist_decision(update: Update, context: ContextTypes.DEFAUL
 
     if action == "ign":
         await query.edit_message_text(TEXTS[lang]["ignore_done"].format(player=decision["player_name"]))
-
-        fake_update = update
-        if fake_update.effective_message:
-            fake_update.effective_message.message_thread_id = decision["topic_id"]
-
         await create_search(update, context, decision["player_name"], skip_blacklist_check=True)
         return
+
 
 async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -395,9 +408,11 @@ async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await create_search(update, context, player_name)
 
+
 async def handle_inline_find(update: Update, context: ContextTypes.DEFAULT_TYPE, player_name: str):
     logger.info("handle_inline_find triggered with player_name=%s", player_name)
     await create_search(update, context, player_name)
+
 
 async def handle_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -437,6 +452,7 @@ async def handle_replies(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     active_searches.pop(key, None)
     logger.info("Reply handled and search removed: %s", key)
+
 
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reaction_update = update.message_reaction
@@ -486,11 +502,13 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_searches.pop(key, None)
     logger.info("Reaction handled and search removed: %s", key)
 
+
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg or not update.effective_user:
         return
     await msg.reply_text(f"Your user ID is: {update.effective_user.id}")
+
 
 async def blacklist_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -516,6 +534,61 @@ async def blacklist_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_blacklist()
     await msg.reply_text(f"{player_name} added to blacklist.")
 
+
+async def blacklist_addmany(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg:
+        return
+    if not is_owner(update):
+        await msg.reply_text("This command is available only in private chat for the bot owner(s).")
+        return
+
+    raw_text = (msg.text or "").strip()
+    parts = raw_text.split("\n", 1)
+    if len(parts) < 2:
+        await msg.reply_text(
+            "Usage:\n"
+            "/blacklist_addmany\n"
+            "- name1\n"
+            "- name2\n"
+            "- name3"
+        )
+        return
+
+    body = parts[1]
+    added = []
+    skipped = []
+
+    for line in body.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.lower() == "blacklisted names:":
+            continue
+        if line.startswith("-"):
+            line = line[1:].strip()
+
+        normalized_name = normalize_name(line)
+        if not normalized_name:
+            continue
+        if normalized_name in BLACKLIST:
+            skipped.append(normalized_name)
+            continue
+
+        BLACKLIST.add(normalized_name)
+        added.append(normalized_name)
+
+    save_blacklist()
+
+    response = f"Added: {len(added)}\nSkipped: {len(skipped)}"
+    if added:
+        response += "\n\nAdded names:\n" + "\n".join(f"- {name}" for name in added)
+    if skipped:
+        response += "\n\nSkipped names:\n" + "\n".join(f"- {name}" for name in skipped)
+
+    await msg.reply_text(response)
+
+
 async def blacklist_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg:
@@ -537,6 +610,7 @@ async def blacklist_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_blacklist()
     await msg.reply_text(f"{player_name} removed from blacklist.")
 
+
 async def blacklist_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if not msg:
@@ -550,6 +624,7 @@ async def blacklist_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "Blacklisted names:\n" + "\n".join(f"- {name}" for name in sorted(BLACKLIST))
     await msg.reply_text(text)
+
 
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -586,6 +661,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await handle_replies(update, context)
 
+
 def main():
     load_blacklist()
 
@@ -593,6 +669,7 @@ def main():
 
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler("blacklist_add", blacklist_add))
+    app.add_handler(CommandHandler("blacklist_addmany", blacklist_addmany))
     app.add_handler(CommandHandler("blacklist_remove", blacklist_remove))
     app.add_handler(CommandHandler("blacklist_list", blacklist_list))
 
@@ -602,6 +679,7 @@ def main():
 
     logger.info("Bot starting...")
     app.run_polling(allowed_updates=["message", "message_reaction", "callback_query"])
+
 
 if __name__ == "__main__":
     main()
