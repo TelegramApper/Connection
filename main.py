@@ -5,14 +5,16 @@ import re
 import html
 import json
 import logging
+import uuid
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode, ChatType
 from telegram.ext import (
     Application,
     MessageHandler,
     MessageReactionHandler,
     CommandHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -46,10 +48,12 @@ TOPIC_B_ID = 3302852
 COOLDOWN = 10
 SEARCH_TIMEOUT = 20
 CONFIRM_DELETE_DELAY = 15
+DECISION_TIMEOUT = 30
 
 active_searches = {}
 user_cooldown = {}
 BLACKLIST = set()
+pending_blacklist_decisions = {}
 
 TEXTS = {
     "en": {
@@ -63,6 +67,15 @@ TEXTS = {
         "no_text": "Use /find or /f as a reply to the player name, or just send: player Name /f.",
         "usage": "Use /find or /f as a reply to the player name, or send: Name /f",
         "write_name": "Write the player name first.",
+        "potential_blacklist": (
+            "This player is potentially blacklisted.\n"
+            "More than 1 player exists in the blacklist.\n\n"
+            "Possible matches:\n{matches}"
+        ),
+        "ignore_done": "Ignored potential blacklist match.\nSearching for {player}",
+        "cancelled_blacklist": "Search cancelled. Marked as blacklisted.",
+        "decision_expired": "This choice has expired.",
+        "decision_not_allowed": "Only the user who started this search can choose.",
     },
     "it": {
         "header": "Rispondi a questo messaggio (in Inglese) se sei qua\n⏱️ {timeout} sec",
@@ -75,11 +88,47 @@ TEXTS = {
         "no_text": "Usa /f rispondendo al nome del player, oppure scrivi: player Nome /f",
         "usage": "Usa /f rispondendo al nome del player, oppure scrivi: Nome /f",
         "write_name": "Per favore scrivi il nome prima del comando",
+        "potential_blacklist": (
+            "Questo player potrebbe essere in blacklist.\n"
+            "Più di un player esiste nella blacklist.\n\n"
+            "Possibili corrispondenze:\n{matches}"
+        ),
+        "ignore_done": "Blacklist ignorata.\nSto cercando {player}",
+        "cancelled_blacklist": "Ricerca annullata. Contrassegnato come blacklist.",
+        "decision_expired": "Questa scelta è scaduta.",
+        "decision_not_allowed": "Solo chi ha avviato la ricerca può scegliere.",
     },
 }
 
 def normalize_name(name: str) -> str:
     return (name or "").strip().casefold()
+
+def compact_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", normalize_name(name))
+
+def find_partial_blacklist_matches(player_name: str):
+    query_norm = normalize_name(player_name)
+    query_compact = compact_name(player_name)
+
+    if not query_norm:
+        return []
+
+    exact_matches = [name for name in BLACKLIST if normalize_name(name) == query_norm]
+    if exact_matches:
+        return exact_matches
+
+    if len(query_compact) < 4:
+        return []
+
+    prefix_matches = [name for name in BLACKLIST if compact_name(name).startswith(query_compact)]
+    if prefix_matches:
+        return sorted(prefix_matches)
+
+    contains_matches = [name for name in BLACKLIST if query_compact in compact_name(name)]
+    if len(contains_matches) == 1:
+        return sorted(contains_matches)
+
+    return sorted(prefix_matches or contains_matches)
 
 def load_blacklist():
     global BLACKLIST
@@ -160,7 +209,14 @@ async def cleanup_search_later(key):
         del active_searches[key]
         logger.info("Search expired and removed: %s", key)
 
-async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, player_name: str):
+async def cleanup_decision_later(decision_id):
+    await asyncio.sleep(DECISION_TIMEOUT)
+    decision = pending_blacklist_decisions.get(decision_id)
+    if decision and time.time() > decision["expire"]:
+        pending_blacklist_decisions.pop(decision_id, None)
+        logger.info("Decision expired and removed: %s", decision_id)
+
+async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, player_name: str, skip_blacklist_check: bool = False):
     msg = update.message
     chat = update.effective_chat
     if not msg or not msg.from_user or not chat:
@@ -193,6 +249,43 @@ async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, play
         else:
             await msg.reply_text(TEXTS["en"]["blacklisted"].format(player=player_name))
         return
+
+    if not skip_blacklist_check:
+        partial_matches = find_partial_blacklist_matches(player_name)
+        unique_non_exact = [m for m in partial_matches if normalize_name(m) != normalized_name]
+
+        if len(unique_non_exact) == 1:
+            if source_lang == "it":
+                await msg.reply_text(f"{player_name} {TEXTS['it']['blacklisted']}")
+            else:
+                await msg.reply_text(TEXTS["en"]["blacklisted"].format(player=player_name))
+            return
+
+        if len(unique_non_exact) > 1:
+            decision_id = uuid.uuid4().hex[:12]
+            pending_blacklist_decisions[decision_id] = {
+                "chat_id": msg.chat_id,
+                "topic_id": msg.message_thread_id,
+                "user_id": user.id,
+                "player_name": player_name,
+                "find_message_id": msg.message_id,
+                "expire": time.time() + DECISION_TIMEOUT,
+            }
+            asyncio.create_task(cleanup_decision_later(decision_id))
+
+            matches_text = "\n".join(f"- {m}" for m in unique_non_exact[:5])
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🚫 Treat as blacklisted", callback_data=f"blk:{decision_id}"),
+                    InlineKeyboardButton("✅ Ignore", callback_data=f"ign:{decision_id}"),
+                ]
+            ])
+
+            await msg.reply_text(
+                TEXTS[source_lang]["potential_blacklist"].format(matches=matches_text),
+                reply_markup=keyboard,
+            )
+            return
 
     confirm_text = TEXTS[source_lang]["searching"].format(player=player_name)
     confirm_msg = await msg.reply_text(confirm_text)
@@ -228,6 +321,44 @@ async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, play
     }
     logger.info("Search stored with key=%s", key)
     asyncio.create_task(cleanup_search_later(key))
+
+async def handle_blacklist_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query or not query.data:
+        return
+
+    await query.answer()
+
+    action, _, decision_id = query.data.partition(":")
+    decision = pending_blacklist_decisions.get(decision_id)
+    lang = "en"
+    if query.message and query.message.chat:
+        lang = chat_lang(query.message.chat.id)
+
+    if not decision or time.time() > decision["expire"]:
+        await query.edit_message_text(TEXTS[lang]["decision_expired"])
+        pending_blacklist_decisions.pop(decision_id, None)
+        return
+
+    if not query.from_user or query.from_user.id != decision["user_id"]:
+        await query.answer(TEXTS[lang]["decision_not_allowed"], show_alert=True)
+        return
+
+    pending_blacklist_decisions.pop(decision_id, None)
+
+    if action == "blk":
+        await query.edit_message_text(TEXTS[lang]["cancelled_blacklist"])
+        return
+
+    if action == "ign":
+        await query.edit_message_text(TEXTS[lang]["ignore_done"].format(player=decision["player_name"]))
+
+        fake_update = update
+        if fake_update.effective_message:
+            fake_update.effective_message.message_thread_id = decision["topic_id"]
+
+        await create_search(update, context, decision["player_name"], skip_blacklist_check=True)
+        return
 
 async def handle_find(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -450,11 +581,12 @@ def main():
     app.add_handler(CommandHandler("blacklist_remove", blacklist_remove))
     app.add_handler(CommandHandler("blacklist_list", blacklist_list))
 
+    app.add_handler(CallbackQueryHandler(handle_blacklist_decision, pattern=r"^(blk|ign):"))
     app.add_handler(MessageReactionHandler(handle_reaction))
     app.add_handler(MessageHandler(filters.ALL, router))
 
     logger.info("Bot starting...")
-    app.run_polling(allowed_updates=["message", "message_reaction"])
+    app.run_polling(allowed_updates=["message", "message_reaction", "callback_query"])
 
 if __name__ == "__main__":
     main()
