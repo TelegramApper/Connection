@@ -47,8 +47,9 @@ TOPIC_B_ID = 3302852
 
 COOLDOWN = 10
 SEARCH_TIMEOUT = 20
-CONFIRM_DELETE_DELAY = 15
+CONFIRM_DELETE_DELAY = 10
 DECISION_TIMEOUT = 30
+DECISION_MESSAGE_DELETE_DELAY = 10
 
 active_searches = {}
 user_cooldown = {}
@@ -68,7 +69,7 @@ TEXTS = {
         "usage": "Use /find or /f as a reply to the player name, or send: Name /f",
         "write_name": "Write the player name first.",
         "potential_blacklist": (
-            "This player is potentially blacklisted.\n"
+            "This player might be on the blacklist.\n"
             "Possible matches:\n{matches}"
         ),
         "ignore_done": "Ignored potential blacklist match.",
@@ -240,21 +241,72 @@ async def cleanup_decision_later(decision_id):
         logger.info("Decision expired and removed: %s", decision_id)
 
 
-async def create_search(
-    update: Update,
+async def continue_search_from_decision(
     context: ContextTypes.DEFAULT_TYPE,
+    *,
+    source_chat_id: int,
+    source_topic_id: int | None,
+    source_user_id: int,
+    source_user_name: str,
+    find_message_id: int,
     player_name: str,
-    skip_blacklist_check: bool = False,
-    forced_msg=None,
-    forced_chat=None,
-    forced_user=None,
 ):
-    msg = forced_msg or update.message or update.effective_message
-    chat = forced_chat or update.effective_chat
-    user = forced_user or update.effective_user
+    target_route = get_route(source_chat_id)
+    if not target_route:
+        logger.warning("No route found for chat_id=%s", source_chat_id)
+        return
 
-    if not msg or not user or not chat:
-        logger.warning("create_search aborted: msg/user/chat missing")
+    source_lang = chat_lang(source_chat_id)
+
+    confirm_text = TEXTS[source_lang]["searching"].format(player=player_name)
+    confirm_msg = await context.bot.send_message(
+        chat_id=source_chat_id,
+        message_thread_id=source_topic_id,
+        reply_to_message_id=find_message_id,
+        text=confirm_text,
+    )
+
+    asyncio.create_task(
+        delete_message_later(context, confirm_msg.chat_id, confirm_msg.message_id, CONFIRM_DELETE_DELAY)
+    )
+
+    header_lang = "it" if source_chat_id == GROUP_A_ID else "en"
+    header_text = f"{player_name}\n\n" + TEXTS[header_lang]["header"].format(timeout=SEARCH_TIMEOUT)
+
+    logger.info(
+        "Continuing search from decision: player=%s from_chat=%s to_chat=%s thread=%s",
+        player_name,
+        source_chat_id,
+        target_route["target_group"],
+        target_route["target_topic"],
+    )
+
+    sent_msg = await context.bot.send_message(
+        chat_id=target_route["target_group"],
+        message_thread_id=target_route["target_topic"],
+        text=header_text,
+    )
+
+    key = (target_route["target_group"], sent_msg.message_id)
+    active_searches[key] = {
+        "origin_group": target_route["origin_group"],
+        "origin_topic": target_route["origin_topic"],
+        "origin_user_id": source_user_id,
+        "origin_user_name": source_user_name,
+        "find_message_id": find_message_id,
+        "player_name": player_name,
+        "expire": time.time() + SEARCH_TIMEOUT,
+        "handled": False,
+    }
+
+    logger.info("Search stored with key=%s", key)
+    asyncio.create_task(cleanup_search_later(key))
+
+
+async def create_search(update: Update, context: ContextTypes.DEFAULT_TYPE, player_name: str):
+    msg = update.message
+    chat = update.effective_chat
+    if not msg or not msg.from_user or not chat:
         return
 
     source_chat_id = chat.id
@@ -265,6 +317,7 @@ async def create_search(
         logger.warning("No route found for chat_id=%s", source_chat_id)
         return
 
+    user = msg.from_user
     now = time.time()
     if user.id in user_cooldown and now - user_cooldown[user.id] < COOLDOWN:
         logger.info("Cooldown hit for user %s", user.id)
@@ -278,43 +331,52 @@ async def create_search(
 
     normalized_name = normalize_name(player_name)
     if normalized_name in BLACKLIST:
+        reply = None
         if source_lang == "it":
-            await msg.reply_text(f"{player_name} {TEXTS['it']['blacklisted']}")
+            reply = await msg.reply_text(f"{player_name} {TEXTS['it']['blacklisted']}")
         else:
-            await msg.reply_text(TEXTS["en"]["blacklisted"].format(player=player_name))
+            reply = await msg.reply_text(TEXTS["en"]["blacklisted"].format(player=player_name))
+        if reply:
+            asyncio.create_task(
+                delete_message_later(context, reply.chat_id, reply.message_id, DECISION_MESSAGE_DELETE_DELAY)
+            )
         return
 
-    if not skip_blacklist_check:
-        partial_matches = find_partial_blacklist_matches(player_name)
-        unique_non_exact = [m for m in partial_matches if normalize_name(m) != normalized_name]
+    partial_matches = find_partial_blacklist_matches(player_name)
+    unique_non_exact = [m for m in partial_matches if normalize_name(m) != normalized_name]
 
-        if len(unique_non_exact) >= 1:
-            decision_id = uuid.uuid4().hex[:12]
-            pending_blacklist_decisions[decision_id] = {
-                "chat_id": msg.chat_id,
-                "topic_id": getattr(msg, "message_thread_id", None),
-                "user_id": user.id,
-                "user_name": user.full_name,
-                "player_name": player_name,
-                "find_message_id": msg.message_id,
-                "expire": time.time() + DECISION_TIMEOUT,
-            }
+    if len(unique_non_exact) >= 1:
+        decision_id = uuid.uuid4().hex[:12]
 
-            asyncio.create_task(cleanup_decision_later(decision_id))
+        matches_text = "\n".join(f"- {m}" for m in unique_non_exact[:10])
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🚫 Blacklist", callback_data=f"blk:{decision_id}"),
+                InlineKeyboardButton("✅ Ignore", callback_data=f"ign:{decision_id}"),
+            ]
+        ])
 
-            matches_text = "\n".join(f"- {m}" for m in unique_non_exact[:10])
-            keyboard = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("🚫 Blacklist", callback_data=f"blk:{decision_id}"),
-                    InlineKeyboardButton("✅ Ignore", callback_data=f"ign:{decision_id}"),
-                ]
-            ])
+        warning_msg = await msg.reply_text(
+            TEXTS[source_lang]["potential_blacklist"].format(matches=matches_text),
+            reply_markup=keyboard,
+        )
 
-            await msg.reply_text(
-                TEXTS[source_lang]["potential_blacklist"].format(matches=matches_text),
-                reply_markup=keyboard,
-            )
-            return
+        pending_blacklist_decisions[decision_id] = {
+            "chat_id": msg.chat_id,
+            "topic_id": getattr(msg, "message_thread_id", None),
+            "user_id": user.id,
+            "user_name": user.full_name,
+            "player_name": player_name,
+            "find_message_id": msg.message_id,
+            "decision_message_id": warning_msg.message_id,
+            "expire": time.time() + DECISION_TIMEOUT,
+        }
+
+        asyncio.create_task(cleanup_decision_later(decision_id))
+        asyncio.create_task(
+            delete_message_later(context, warning_msg.chat_id, warning_msg.message_id, DECISION_MESSAGE_DELETE_DELAY)
+        )
+        return
 
     confirm_text = TEXTS[source_lang]["searching"].format(player=player_name)
     confirm_msg = await msg.reply_text(confirm_text)
@@ -350,7 +412,6 @@ async def create_search(
         "expire": time.time() + SEARCH_TIMEOUT,
         "handled": False,
     }
-
     logger.info("Search stored with key=%s", key)
     asyncio.create_task(cleanup_search_later(key))
 
@@ -370,7 +431,14 @@ async def handle_blacklist_decision(update: Update, context: ContextTypes.DEFAUL
         lang = chat_lang(query.message.chat.id)
 
     if not decision or time.time() > decision["expire"]:
-        await query.edit_message_text(TEXTS[lang]["decision_expired"])
+        try:
+            expired_msg = await query.edit_message_text(TEXTS[lang]["decision_expired"])
+            if expired_msg:
+                asyncio.create_task(
+                    delete_message_later(context, expired_msg.chat_id, expired_msg.message_id, DECISION_MESSAGE_DELETE_DELAY)
+                )
+        except Exception:
+            pass
         pending_blacklist_decisions.pop(decision_id, None)
         return
 
@@ -381,23 +449,40 @@ async def handle_blacklist_decision(update: Update, context: ContextTypes.DEFAUL
     pending_blacklist_decisions.pop(decision_id, None)
 
     if action == "blk":
-        await query.edit_message_text(TEXTS[lang]["cancelled_blacklist"])
+        try:
+            cancelled_msg = await query.edit_message_text(TEXTS[lang]["cancelled_blacklist"])
+            if cancelled_msg:
+                asyncio.create_task(
+                    delete_message_later(context, cancelled_msg.chat_id, cancelled_msg.message_id, DECISION_MESSAGE_DELETE_DELAY)
+                )
+        except Exception:
+            if query.message:
+                asyncio.create_task(
+                    delete_message_later(context, query.message.chat_id, query.message.message_id, DECISION_MESSAGE_DELETE_DELAY)
+                )
         return
 
     if action == "ign":
-        await query.edit_message_text(TEXTS[lang]["ignore_done"].format(player=decision["player_name"]))
+        try:
+            ignore_msg = await query.edit_message_text(TEXTS[lang]["ignore_done"])
+            if ignore_msg:
+                asyncio.create_task(
+                    delete_message_later(context, ignore_msg.chat_id, ignore_msg.message_id, DECISION_MESSAGE_DELETE_DELAY)
+                )
+        except Exception:
+            if query.message:
+                asyncio.create_task(
+                    delete_message_later(context, query.message.chat_id, query.message.message_id, DECISION_MESSAGE_DELETE_DELAY)
+                )
 
-        source_chat = query.message.chat
-        source_msg = query.message
-
-        await create_search(
-            update,
+        await continue_search_from_decision(
             context,
-            decision["player_name"],
-            skip_blacklist_check=True,
-            forced_msg=source_msg,
-            forced_chat=source_chat,
-            forced_user=query.from_user,
+            source_chat_id=decision["chat_id"],
+            source_topic_id=decision["topic_id"],
+            source_user_id=decision["user_id"],
+            source_user_name=decision["user_name"],
+            find_message_id=decision["find_message_id"],
+            player_name=decision["player_name"],
         )
         return
 
